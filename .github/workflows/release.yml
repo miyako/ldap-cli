@@ -1,0 +1,121 @@
+name: Release
+
+# Manual release from main: builds universal macOS (signed + notarized) and Windows
+# x64/arm64 binaries, then publishes them as release assets for the `ldap` wrapper repo.
+#
+# Asset names (stable contract for consumers):
+#   ldap-<version>-macos-universal.zip
+#   ldap-<version>-windows-x64.zip
+#   ldap-<version>-windows-arm64.zip
+#   SHA256SUMS.txt
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.0); must match Cargo.toml"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version matches Cargo.toml
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "$v" = "${{ inputs.version }}" ] || { echo "Cargo.toml has $v, input is ${{ inputs.version }}"; exit 1; }
+
+  macos:
+    needs: check
+    runs-on: macos-latest
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps/macos
+            deps/.build-macos/dl
+          key: deps-macos-${{ hashFiles('deps.lock', 'scripts/build-deps-macos.sh') }}
+      - run: scripts/build-deps-macos.sh
+      - name: Universal build
+        run: |
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/ldap target/aarch64-apple-darwin/release/ldap target/x86_64-apple-darwin/release/ldap
+      - name: Integration tests
+        run: |
+          brew install openldap
+          tests/integration/macos.sh "$PWD/dist/ldap"
+      - name: Developer ID sign and notarize
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARYTOOL_APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
+          NOTARYTOOL_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
+        run: scripts/sign-macos.sh dist/ldap "out/ldap-${{ inputs.version }}-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*.zip
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "stage"
+          New-Item -ItemType Directory -Force $stage, out | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/ldap.exe" $stage
+          Copy-Item README.md $stage
+          Copy-Item -Recurse licenses "$stage/licenses"
+          Compress-Archive -Path "$stage/*" -DestinationPath "out/ldap-${{ inputs.version }}-windows-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: out/*.zip
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: cd assets && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" assets/* \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "ldap ${{ inputs.version }}" --notes "Binaries for the ldap wrapper. Verify with SHA256SUMS.txt."

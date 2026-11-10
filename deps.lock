@@ -1,0 +1,5 @@
+# Pinned third-party sources for the macOS build (verified against upstream-published digests).
+openssl.version=3.5.4
+openssl.sha256=967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99
+openldap.version=2.6.10
+openldap.sha256=c065f04aad42737aebd60b2fe4939704ac844266bc0aeaa1609f0cad987be516

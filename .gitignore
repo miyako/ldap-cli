@@ -1,0 +1,4 @@
+/target
+/deps/.build-macos
+/deps/macos
+/deps/build.log

@@ -1,0 +1,9 @@
+# Static CRT on Windows: the binary needs no Visual C++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"

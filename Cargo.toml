@@ -1,0 +1,33 @@
+[package]
+name = "ldap"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "LDAP command-line client using native platform backends (Wldap32/SSPI/Schannel on Windows, OpenLDAP/GSSAPI/Security.framework on macOS)"
+repository = "https://github.com/miyako/ldap-cli"
+build = "build.rs"
+
+[dependencies]
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
+getrandom = "0.4.3"
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = "1.2.1"
+zeroize = "1.9.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+libc = "0.2.191"
+security-framework = "3.7.0"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_Ldap", "Win32_Security_Authentication_Identity", "Win32_Security_Cryptography", "Win32_Networking_ActiveDirectory", "Win32_NetworkManagement_Dns", "Win32_Security_Credentials", "Win32_System_Memory", "Win32_NetworkManagement_NetManagement"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
