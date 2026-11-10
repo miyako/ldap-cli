@@ -64,4 +64,5 @@ jobs:
           "$B" --version
           "$B" escape filter 'a*(b)'
           # NTLM is accepted on Windows (fails later on connect, not at option validation).
-          "$B" -H ldaps://127.0.0.1:1 -M ntlm --connect-timeout 1 whoami; test $? -eq 3
+          rc=0; "$B" -H ldaps://127.0.0.1:1 -M ntlm --connect-timeout 1 whoami || rc=$?
+          test "$rc" -eq 3
