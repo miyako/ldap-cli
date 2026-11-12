@@ -18,13 +18,20 @@ fn main() {
         );
     }
     println!("cargo:rerun-if-changed={lib}/libldap.a");
+    println!("cargo:rerun-if-changed=src/backend/openldap/gssapi.c");
+    cc::Build::new()
+        .file("src/backend/openldap/gssapi.c")
+        .include(format!("{deps}/include"))
+        .warnings(true)
+        .flag("-Werror")
+        .compile("ldap_cli_gssapi");
     println!("cargo:rustc-link-search=native={lib}");
     for l in ["ldap", "lber", "ssl", "crypto"] {
         println!("cargo:rustc-link-lib=static={l}");
     }
     println!("cargo:rustc-link-lib=dylib=sasl2");
     println!("cargo:rustc-link-lib=dylib=resolv");
-    for f in ["Security", "CoreFoundation"] {
+    for f in ["Security", "CoreFoundation", "GSS"] {
         println!("cargo:rustc-link-lib=framework={f}");
     }
 }

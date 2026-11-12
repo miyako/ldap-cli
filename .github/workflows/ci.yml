@@ -37,8 +37,9 @@ jobs:
           otool -L ldap
       - name: Integration tests against a local slapd
         run: |
-          brew install openldap
+          brew install openldap krb5
           tests/integration/macos.sh "$PWD/ldap"
+          bash tests/integration/kerberos-macos.sh "$PWD/ldap"
 
   windows:
     runs-on: windows-latest

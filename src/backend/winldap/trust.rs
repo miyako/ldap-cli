@@ -33,6 +33,7 @@ impl VerifyState {
 /// Whether the default Schannel verification is enough.
 pub fn needed(tls: &TlsOptions) -> bool {
     !tls.ca_certs.is_empty()
+        || tls.server_name.is_some()
         || tls.insecure_skip_verify
         || tls.capture_chain
         || tls.revocation != Revocation::Soft

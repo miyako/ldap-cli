@@ -201,6 +201,33 @@ pub fn resolve(g: &Global, p: &Profile, stdin: &mut StdinGuard) -> Result<Resolv
     if channel_binding == ChannelBinding::Require && tls_mode == TlsMode::None {
         return Err(Error::usage("--channel-binding require needs TLS"));
     }
+    if channel_binding == ChannelBinding::Require {
+        if !matches!(mech, Mech::Gssapi | Mech::Spnego | Mech::Ntlm) {
+            return Err(Error::usage(
+                "--channel-binding require needs a CBT-capable SASL mechanism, not simple, anonymous or external",
+            ));
+        }
+        if !cfg!(windows) && mech != Mech::Gssapi {
+            return Err(Error::usage(
+                "--channel-binding require supports only --mech gssapi on macOS",
+            ));
+        }
+        if g.insecure_skip_verify {
+            return Err(Error::usage(
+                "--channel-binding require cannot disable certificate and hostname verification",
+            ));
+        }
+        if referrals {
+            return Err(Error::usage(
+                "--channel-binding require cannot follow referrals; connect to each trusted server explicitly",
+            ));
+        }
+        if g.password_file.is_some() {
+            return Err(Error::usage(
+                "--channel-binding require does not accept password files; use stdin, an environment variable or the Windows prompt",
+            ));
+        }
+    }
     if cfg!(windows) && (g.ccache.is_some() || g.authzid.is_some()) {
         return Err(Error::usage(
             "--ccache and --authzid are not used on Windows (SSPI uses your logon session or --user)",
@@ -244,6 +271,19 @@ pub fn resolve(g: &Global, p: &Profile, stdin: &mut StdinGuard) -> Result<Resolv
                     "--bind-dn is for simple bind; use --user for SASL/NTLM identities",
                 ));
             }
+            if let Some(u) = &user
+                && (u.is_empty()
+                    || u.contains('\0')
+                    || u.split_once('\\').is_some_and(|(domain, name)| {
+                        domain.is_empty() || name.is_empty() || name.contains('\\')
+                    })
+                    || u.rsplit_once('@')
+                        .is_some_and(|(name, realm)| name.is_empty() || realm.is_empty()))
+            {
+                return Err(Error::usage(
+                    "--user must be a nonempty identity with no NUL or empty domain/user parts",
+                ));
+            }
             if cfg!(windows) {
                 match (&user, pw_source) {
                     (Some(u), src) => Some(secret::read_password(
@@ -253,12 +293,42 @@ pub fn resolve(g: &Global, p: &Profile, stdin: &mut StdinGuard) -> Result<Resolv
                     (None, None) => None, // logged-in user via SSPI
                 }
             } else {
-                if pw_source.is_some() {
+                let native = pw_source.is_some() || channel_binding == ChannelBinding::Require;
+                if native
+                    && (g.ccache.is_some()
+                        || g.authzid.is_some()
+                        || g.realm.is_some()
+                        || p.realm.is_some())
+                {
                     return Err(Error::usage(
-                        "on macOS, GSSAPI uses your Kerberos tickets; run 'kinit user@REALM' instead of passing a password",
+                        "explicit credentials and required CBT on macOS cannot use --ccache, --authzid or --realm; use a UPN",
                     ));
                 }
-                None
+                if let Some(src) = pw_source {
+                    if mech != Mech::Gssapi || tls_mode == TlsMode::None {
+                        return Err(Error::usage(
+                            "explicit SASL credentials on macOS need --mech gssapi and TLS",
+                        ));
+                    }
+                    if referrals {
+                        return Err(Error::usage(
+                            "explicit SASL credentials on macOS cannot follow referrals",
+                        ));
+                    }
+                    let u = user
+                        .as_deref()
+                        .ok_or_else(|| Error::usage("a password needs --user"))?;
+                    if !u.rsplit_once('@').is_some_and(|(name, realm)| {
+                        !name.is_empty() && !realm.is_empty() && !u.contains('\\')
+                    }) {
+                        return Err(Error::usage(
+                            "explicit SASL credentials on macOS need --user user@REALM (not a DN or DOMAIN\\user)",
+                        ));
+                    }
+                    Some(secret::read_password(&src)?)
+                } else {
+                    None
+                }
             }
         }
         Mech::External => {
@@ -274,6 +344,14 @@ pub fn resolve(g: &Global, p: &Profile, stdin: &mut StdinGuard) -> Result<Resolv
             None
         }
     };
+    if matches!(mech, Mech::Gssapi | Mech::Spnego | Mech::Ntlm)
+        && g.realm
+            .as_ref()
+            .or(p.realm.as_ref())
+            .is_some_and(|r| r.contains('\0'))
+    {
+        return Err(Error::usage("--realm must not contain NUL"));
+    }
 
     let connect = ConnectOptions {
         targets,
@@ -509,5 +587,89 @@ mod tests {
         let mut x = g();
         x.ca_cert = vec!["aGVsbG8=".into()];
         assert!(run(&x).is_err());
+    }
+
+    #[test]
+    fn required_cbt_rejects_non_sasl_before_reading_password() {
+        for mech in [Mech::Anonymous, Mech::Simple, Mech::External] {
+            let mut x = g();
+            x.mech = Some(mech);
+            x.channel_binding = Some(ChannelBinding::Require);
+            x.password_stdin = true;
+            let e = run(&x).err().unwrap();
+            assert_eq!(e.exit_code(), 2);
+            assert!(e.to_string().contains("CBT-capable"));
+        }
+    }
+
+    #[test]
+    fn required_cbt_requires_trusted_tls_without_referrals() {
+        let mut x = g();
+        x.mech = Some(Mech::Gssapi);
+        x.channel_binding = Some(ChannelBinding::Require);
+        assert!(run(&x).is_ok(), "intentional SSO remains supported");
+        x.password_file = Some("must-not-be-read".into());
+        assert!(
+            run(&x)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("password files")
+        );
+        x.password_file = None;
+        x.insecure_skip_verify = true;
+        assert!(run(&x).err().unwrap().to_string().contains("verification"));
+        x.insecure_skip_verify = false;
+        x.referrals = Some(Referrals::Follow);
+        assert!(run(&x).err().unwrap().to_string().contains("referrals"));
+        x.referrals = None;
+        x.uri = vec!["ldap://h".into()];
+        x.tls = Some(TlsMode::None);
+        x.allow_plaintext = true;
+        assert!(run(&x).err().unwrap().to_string().contains("needs TLS"));
+    }
+
+    #[test]
+    fn sasl_rejects_empty_user_instead_of_service_identity() {
+        let mut x = g();
+        x.mech = Some(Mech::Gssapi);
+        for user in [
+            "",
+            "alice\0@EXAMPLE.TEST",
+            "EXAMPLE\\",
+            "\\alice",
+            "@EXAMPLE.TEST",
+            "alice@",
+        ] {
+            x.user = Some(user.into());
+            assert!(run(&x).err().unwrap().to_string().contains("--user"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn explicit_credentials_do_not_need_existing_tickets() {
+        let mut x = g();
+        x.mech = Some(Mech::Gssapi);
+        x.user = Some("alice@EXAMPLE.TEST".into());
+        unsafe { std::env::set_var("LDAP_CLI_EXPLICIT_TEST", "test-only-password") };
+        x.password_env = Some("LDAP_CLI_EXPLICIT_TEST".into());
+        x.channel_binding = Some(ChannelBinding::Require);
+        let r = run(&x).unwrap();
+        assert_eq!(r.connect.auth.user.as_deref(), Some("alice@EXAMPLE.TEST"));
+        assert_eq!(
+            r.connect.auth.password.unwrap().bytes(),
+            b"test-only-password"
+        );
+        x.ccache = Some("FILE:/tmp/not-used".into());
+        assert!(run(&x).is_err());
+        x.ccache = None;
+        x.user = None;
+        assert!(run(&x).err().unwrap().to_string().contains("needs --user"));
+        x.user = Some("EXAMPLE\\alice".into());
+        assert!(run(&x).err().unwrap().to_string().contains("user@REALM"));
+        x.user = Some("alice@EXAMPLE.TEST".into());
+        x.mech = Some(Mech::Spnego);
+        assert!(run(&x).is_err(), "never downgrade an unsupported mechanism");
     }
 }
