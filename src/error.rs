@@ -132,6 +132,9 @@ pub fn result_name(code: i32) -> &'static str {
 /// Active Directory packs the real reason into the diagnostic message as "data XXX".
 /// Translate the common ones for bind failures.
 pub fn ad_bind_hint(message: &str) -> Option<&'static str> {
+    if message.to_ascii_lowercase().contains("80090346") {
+        return Some("channel binding rejected (SEC_E_BAD_BINDINGS)");
+    }
     let code = message.split("data ").nth(1)?.get(0..3)?;
     Some(match code {
         "525" => "user not found",
@@ -145,4 +148,19 @@ pub fn ad_bind_hint(message: &str) -> Option<&'static str> {
         "775" => "account locked out",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cbt_diagnostic_is_not_mislabeled_as_bad_password() {
+        assert_eq!(
+            ad_bind_hint("80090346: LdapErr: data 80090346, v4563"),
+            Some("channel binding rejected (SEC_E_BAD_BINDINGS)")
+        );
+        assert_eq!(ad_bind_hint("data 52e, v4563"), Some("invalid credentials"));
+        assert_eq!(ad_bind_hint("LDAP invalid credentials (49)"), None);
+    }
 }

@@ -22,6 +22,16 @@ pub fn run(cli: Cli) -> Result<()> {
     let g = cli.global;
     // Offline commands first: no profile, no connection.
     match cli.command {
+        Command::Capabilities => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": 1,
+                    "features": ["explicit-credentials-sasl", "channel-binding-require"],
+                })
+            );
+            return Ok(());
+        }
         Command::Escape(e) => {
             match e {
                 EscapeCmd::Filter { value } => println!("{}", escape::filter_value(&value)),
@@ -136,7 +146,7 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Command::Passwd(a) => passwd(&ctx, a, &mut stdin),
         Command::Probe(a) => probe(&ctx, a),
-        Command::Escape(_) | Command::Dn(_) => unreachable!(),
+        Command::Capabilities | Command::Escape(_) | Command::Dn(_) => unreachable!(),
     }
 }
 

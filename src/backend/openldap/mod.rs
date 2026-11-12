@@ -1,5 +1,6 @@
 //! macOS backend: OpenLDAP 2.6 (vendored, static) + system Cyrus SASL (GSSAPI via
 //! GSS.framework) + OpenSSL 3 for the TLS channel, with Security.framework deciding trust.
+//! Explicit credentials and required CBT use native GSS directly.
 
 mod ffi;
 mod identity;
@@ -395,6 +396,48 @@ fn connect_error(s: &OlSession, rc: c_int) -> Error {
 fn bind(s: &mut OlSession, opts: &ConnectOptions) -> Result<()> {
     let a = &opts.auth;
     let ld = s.ld;
+    if a.mech == Mech::Gssapi
+        && (a.password.is_some() || a.channel_binding == ChannelBinding::Require)
+    {
+        let host = cstr(&s.info.host)?;
+        let user = a.user.as_deref().map(cstr).transpose()?;
+        let mut detail = [0 as c_char; 2048];
+        let password = a.password.as_ref().map(|p| p.bytes());
+        let rc = unsafe {
+            ldap_cli_gssapi_bind(
+                ld,
+                host.as_ptr(),
+                user.as_ref().map_or(null(), |u| u.as_ptr()),
+                password.map_or(null(), |p| p.as_ptr()),
+                password.map_or(0, |p| p.len()),
+                (a.channel_binding != ChannelBinding::None) as c_int,
+                detail.as_mut_ptr(),
+                detail.len(),
+            )
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        if is_transport_error(rc) {
+            return Err(connect_error(s, rc));
+        }
+        let local = unsafe { CStr::from_ptr(detail.as_ptr()) }.to_string_lossy();
+        let diag = s.diag().0;
+        return Err(Error::auth(format!(
+            "{} ({rc}){}{}",
+            err_string(rc),
+            if local.is_empty() {
+                String::new()
+            } else {
+                format!(": {local}")
+            },
+            if diag.is_empty() {
+                String::new()
+            } else {
+                format!(": {diag}")
+            },
+        )));
+    }
     let rc = match a.mech {
         Mech::Anonymous => return Ok(()),
         Mech::Simple => {

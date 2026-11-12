@@ -89,6 +89,16 @@ pub const SASL_CB_PASS: c_ulong = 0x4004;
 pub const SASL_CB_GETREALM: c_ulong = 0x4008;
 
 unsafe extern "C" {
+    pub fn ldap_cli_gssapi_bind(
+        ld: *mut LDAP,
+        host: *const c_char,
+        user: *const c_char,
+        password: *const u8,
+        password_length: usize,
+        use_binding: c_int,
+        error: *mut c_char,
+        error_size: usize,
+    ) -> c_int;
     pub fn ldap_initialize(ldp: *mut *mut LDAP, uri: *const c_char) -> c_int;
     pub fn ldap_set_option(ld: *mut LDAP, option: c_int, invalue: *const c_void) -> c_int;
     pub fn ldap_get_option(ld: *mut LDAP, option: c_int, outvalue: *mut c_void) -> c_int;

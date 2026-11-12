@@ -2,6 +2,7 @@
 //! binds, Schannel for TLS, CryptoAPI for certificate decisions and client identities.
 
 mod identity;
+mod sasl;
 mod trust;
 
 use super::Session;
@@ -318,7 +319,8 @@ pub fn connect(opts: &ConnectOptions, t: &Target) -> Result<Box<dyn Session>> {
     );
 
     // Callback state must exist before the TLS handshake.
-    let verify = if opts.tls.mode != TlsMode::None && trust::needed(&opts.tls) {
+    let strict = opts.auth.channel_binding == ChannelBinding::Require;
+    let verify = if opts.tls.mode != TlsMode::None && (trust::needed(&opts.tls) || strict) {
         Some(trust::VerifyState::new(&opts.tls, &t.host))
     } else {
         None
@@ -336,11 +338,26 @@ pub fn connect(opts: &ConnectOptions, t: &Target) -> Result<Box<dyn Session>> {
     unsafe {
         if has_verify {
             let cb: VERIFYSERVERCERT = Some(verify_server);
-            ldap_set_optionW(
+            let rc = ldap_set_optionW(
                 ld,
                 LDAP_OPT_SERVER_CERTIFICATE as i32,
                 cb.map_or(null(), |f| f as *const c_void),
             );
+            if rc != 0 {
+                return Err(Error::connect(
+                    "cannot install server certificate verification",
+                ));
+            }
+        }
+        if strict {
+            for (option, value) in [
+                (LDAP_OPT_AUTO_RECONNECT, LDAP_OPT_OFF),
+                (LDAP_OPT_PROMPT_CREDENTIALS, LDAP_OPT_OFF),
+            ] {
+                if s.set_u32(option, value) != 0 {
+                    return Err(Error::auth("strict SASL session options unavailable"));
+                }
+            }
         }
         if has_client {
             let cb: QUERYCLIENTCERT = Some(query_client_cert);
@@ -437,8 +454,19 @@ fn connect_error(s: &WinSession, rc: u32) -> Error {
     Error::connect(msg)
 }
 
+fn packages(auth: &AuthOptions) -> &'static str {
+    match (auth.mech, auth.allow_ntlm) {
+        (Mech::Ntlm, _) => "NTLM",
+        (Mech::Spnego, true) => "Kerberos,NTLM",
+        _ => "Kerberos,!NTLM",
+    }
+}
+
 fn bind(s: &mut WinSession, opts: &ConnectOptions) -> Result<()> {
     let a = &opts.auth;
+    if a.channel_binding == ChannelBinding::Require {
+        return sasl::bind(s, a);
+    }
     let rc = match a.mech {
         Mech::Anonymous => return Ok(()),
         Mech::Simple => {
@@ -455,12 +483,7 @@ fn bind(s: &mut WinSession, opts: &ConnectOptions) -> Result<()> {
         }
         Mech::Gssapi | Mech::Spnego | Mech::Ntlm => {
             // Package list: Kerberos only unless NTLM is requested or allowed.
-            let packages = match (a.mech, a.allow_ntlm) {
-                (Mech::Ntlm, _) => "NTLM",
-                (Mech::Spnego, true) => "Kerberos,NTLM",
-                _ => "Kerberos,!NTLM",
-            };
-            let mut pkg = w(packages);
+            let mut pkg = w(packages(a));
             let (mut user, mut domain) = match a.user.as_deref() {
                 Some(u) => match u.split_once('\\') {
                     Some((d, u)) => (w(u), w(d)),

@@ -98,7 +98,7 @@ pub struct Global {
     /// Bind DN for simple bind
     #[arg(short = 'D', long, global = true, help_heading = "Authentication")]
     pub bind_dn: Option<String>,
-    /// SASL/NTLM identity (user@REALM, DOMAIN\user); omit to use the logged-in user
+    /// SASL identity: user@REALM (portable) or DOMAIN\user (Windows); omit for SSO
     #[arg(short = 'U', long, global = true, help_heading = "Authentication")]
     pub user: Option<String>,
     #[arg(long, global = true, help_heading = "Authentication")]
@@ -118,7 +118,7 @@ pub struct Global {
     /// SASL security layer [auto: auth over TLS, seal over plaintext]
     #[arg(long, global = true, value_enum, help_heading = "Authentication")]
     pub sasl_qos: Option<Qos>,
-    /// TLS channel binding for SASL binds (tls-endpoint)
+    /// TLS channel binding: require enforces verified TLS and supported SASL, with no fallback
     #[arg(long, global = true, value_enum, help_heading = "Authentication")]
     pub channel_binding: Option<ChannelBinding>,
     /// Allow Negotiate/SPNEGO to fall back to NTLM (Windows)
@@ -165,6 +165,8 @@ pub struct TemplateArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Print offline authentication capabilities as JSON (no config, network or credentials)
+    Capabilities,
     /// Search the directory
     Search(SearchArgs),
     /// Add entries (from --dn/--attr or LDIF)

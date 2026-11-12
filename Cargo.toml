@@ -1,6 +1,6 @@
 [package]
 name = "ldap"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "LDAP command-line client using native platform backends (Wldap32/SSPI/Schannel on Windows, OpenLDAP/GSSAPI/Security.framework on macOS)"
@@ -17,6 +17,9 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 toml = "1.2.1"
 zeroize = "1.9.1"
+
+[build-dependencies]
+cc = "1.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
