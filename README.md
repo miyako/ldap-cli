@@ -15,6 +15,13 @@
 
 The binaries are released for the `ldap` wrapper component; see [Release assets](#release-assets).
 
+Version **0.2.0** adds explicit user/password Kerberos SASL authentication on
+macOS, explicit CBT handling in required mode on both platforms, and the offline
+`capabilities` contract for component version gating. Simple-bind and non-required
+SSO compatibility defaults remain unchanged. This release does not certify
+Windows native authentication or real-AD Always-policy interoperability; see
+[Status and known gaps](#status-and-known-gaps).
+
 ## Quick start
 
 ```sh
@@ -154,6 +161,13 @@ The **Release** workflow (manual, from `main`, `release-signing` environment) pu
 | `ldap-<version>-windows-x64.zip` | `ldap.exe`, README, licenses |
 | `ldap-<version>-windows-arm64.zip` | `ldap.exe`, README, licenses |
 | `SHA256SUMS.txt` | checksums of the zips |
+
+Consumers should pin a release tag **and** the SHA-256 of every archive they use,
+then require the two advertised authentication capabilities before transmitting
+strict-mode credentials. The official workflow exercises local macOS Kerberos
+authentication, Windows x64 unit/offline commands and the capability contract;
+macOS archives are Developer ID signed and notarized. Neither a published archive
+nor successful local tests replace the real-AD acceptance below.
 
 ## Status and known gaps
 

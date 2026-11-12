@@ -54,8 +54,12 @@ jobs:
           lipo -create -output dist/ldap target/aarch64-apple-darwin/release/ldap target/x86_64-apple-darwin/release/ldap
       - name: Integration tests
         run: |
-          brew install openldap
+          brew install openldap krb5
           tests/integration/macos.sh "$PWD/dist/ldap"
+          bash tests/integration/kerberos-macos.sh "$PWD/dist/ldap"
+      - name: Offline authentication capability contract
+        run: |
+          dist/ldap capabilities | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["schema"] == 1; assert {"explicit-credentials-sasl", "channel-binding-require"} <= set(c["features"])'
       - name: Developer ID sign and notarize
         env:
           APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
@@ -86,6 +90,19 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Unit and offline command tests
+        if: matrix.arch == 'x64'
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Offline authentication capability contract
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $caps = & "target/${{ matrix.target }}/release/ldap.exe" capabilities | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $caps.schema -ne 1 -or
+              $caps.features -notcontains "explicit-credentials-sasl" -or
+              $caps.features -notcontains "channel-binding-require") {
+            throw "Required authentication capabilities are missing"
+          }
       - name: Package
         shell: pwsh
         run: |
